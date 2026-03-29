@@ -214,7 +214,23 @@ async def handle_task_selection(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if matched["id"] in done:
-        await update.message.reply_text("You already completed that one today! 😄")
+        await update.message.reply_text(
+            f"🚫 <b>{matched['name']}</b> is already done today!
+"
+            "No extra points — one task per day, Champ! 😄",
+            parse_mode="HTML",
+            reply_markup=son_main_keyboard()
+        )
+        return
+
+    # Double-check with a fresh load to prevent race conditions
+    data = load_data()
+    done = today_completed(data)
+    if matched["id"] in done:
+        await update.message.reply_text(
+            f"🚫 Already logged! No duplicate points allowed. 😄",
+            reply_markup=son_main_keyboard()
+        )
         return
 
     # Award points
@@ -568,7 +584,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Son button handlers
     if is_son(update):
-        if context.user_data.get("awaiting_task") and text.startswith("✔ "):
+        if text.startswith("✔ "):
             await handle_task_selection(update, context)
             return
         if text == "✅ Mark task done":
