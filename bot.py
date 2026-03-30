@@ -455,12 +455,20 @@ async def parent_view_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data  = load_data()
     lines = ["<b>📋 Current Tasks</b>\n"]
+    lines.append("<i>ID (for commands) — Task name — Points</i>\n")
     for t in data["tasks"]:
         lines.append(
-            "• <code>" + t["id"] + "</code>  " + t["name"] + "  — " + str(t["points"]) + " pts"
+            "• ID: <code>" + t["id"] + "</code>\n"
+            "  " + t["name"] + "  — <b>" + str(t["points"]) + " pts</b>"
         )
-    lines.append("\nTo add: <code>/addtask id|Name|points</code>")
-    lines.append("To remove: <code>/removetask id</code>")
+    lines.append(
+        "\n<b>Commands:</b>\n"
+        "Add:    <code>/addtask id|Name|points</code>\n"
+        "Remove: <code>/removetask id</code>\n\n"
+        "<b>Example:</b>\n"
+        "<code>/addtask piano|🎹 Piano Practice|15</code>\n"
+        "<code>/removetask piano</code>"
+    )
     await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -573,6 +581,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Use <code>/points +50</code> or <code>/points -20</code> to adjust points.",
                 parse_mode="HTML"
             )
+        elif text == "➕ Add task":
+            data  = load_data()
+            lines = ["<b>➕ Add a New Task</b>\n"]
+            lines.append("Use this command format:\n")
+            lines.append("<code>/addtask id|Name|points</code>\n")
+            lines.append("<b>Rules:</b>")
+            lines.append("• ID must be one word, no spaces (e.g. <code>piano</code>)")
+            lines.append("• Name can include emoji (e.g. 🎹 Piano Practice)")
+            lines.append("• Points must be a number\n")
+            lines.append("<b>Examples:</b>")
+            lines.append("<code>/addtask piano|🎹 Piano Practice|15</code>")
+            lines.append("<code>/addtask prayer|🤲 Evening Prayer|10</code>")
+            lines.append("<code>/addtask shower|🚿 Shower|10</code>\n")
+            lines.append("<b>Current task IDs (already in use):</b>")
+            for t in data["tasks"]:
+                lines.append("• <code>" + t["id"] + "</code>  " + t["name"])
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         elif text == "🔄 Reset today":
             await reset_today(update, context)
         elif text == "🎁 Manage rewards":
