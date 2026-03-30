@@ -1,6 +1,6 @@
 """
 ChampBot - Final Version (Seychelles Edition)
-Includes: 21 Tasks, Photo Proof, Exercise Penalties, and Streak Bonuses.
+Includes: 21 Tasks, Photo Proof, Exercise Penalties, Streak Bonuses, and ALL working buttons.
 """
 
 import json
@@ -96,6 +96,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("<b>🏆 Parent Panel Active</b>", parse_mode="HTML", reply_markup=parent_main_keyboard())
     elif chat_id == SON_CHAT_ID:
         await update.message.reply_text("<b>🏆 Welcome Champ!</b>", parse_mode="HTML", reply_markup=son_main_keyboard())
+    else:
+        await update.message.reply_text(f"Your Chat ID: <code>{chat_id}</code>", parse_mode="HTML")
 
 async def mark_done_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
     data = load_data()
@@ -131,11 +133,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def submit_to_parent(update, context, task, photo_id=None):
     data = load_data()
-    # Calculate Points with Penalties
     final_pts = task["points"]
     now_hour = datetime.now().hour
     now_min = datetime.now().minute
     
+    # Penalties
     if task["id"] == "exercise" and (now_hour > 6 or (now_hour == 6 and now_min > 30)):
         final_pts = 5
         await update.message.reply_text("⚠️ Late morning exercise! Points reduced to 5.")
@@ -192,22 +194,67 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             break
     save_data(data)
 
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    data = load_data()
+    
+    # --- SON COMMANDS ---
+    if is_son(update):
+        if text == "☀️ Morning Missions": await mark_done_prompt(update, context, "morning")
+        elif text == "🌙 Evening & Study": await mark_done_prompt(update, context, "evening")
+        elif text.startswith("✔ "): await handle_submission(update, context)
+        elif text == "🔙 Back": await update.message.reply_text("Main Menu", reply_markup=son_main_keyboard())
+        elif text == "📊 My points":
+            await update.message.reply_text(f"💰 Balance: <b>{data['points']} pts</b>", parse_mode="HTML")
+        elif text == "🏆 My streak":
+            streak = data.get("morning_streak", 0)
+            await update.message.reply_text(f"🔥 Morning Streak: <b>{streak}/5 days</b>\nComplete 5 perfect mornings for 50 bonus points!", parse_mode="HTML")
+        elif text == "🎁 Rewards":
+            lines = [f"<b>🎁 Rewards (Balance: {data['points']} pts)</b>\n"]
+            for r in data["rewards"]:
+                icon = "✅" if data["points"] >= r["cost"] else "🔒"
+                lines.append(f"{icon} {r['name']} — {r['cost']} pts")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        elif text == "📜 History":
+            recent = sorted(data["history"], key=lambda h: h["date"], reverse=True)[:15]
+            if not recent:
+                await update.message.reply_text("No history yet! 💪")
+            else:
+                lines = ["<b>📜 Recent Activity</b>\n"]
+                for h in recent:
+                    status = "⏳" if h["status"] == "pending" else "✅" if h["status"] == "approved" else "❌"
+                    lines.append(f"• {h['date']} | {status} {h['task_name']} ({h['points']} pts)")
+                await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+
+    # --- PARENT COMMANDS ---
+    elif is_parent(update):
+        if text == "✅ Approve Tasks": await approve_tasks_menu(update, context)
+        elif text == "📋 View all tasks":
+            lines = ["<b>📋 Current Tasks</b>\n"]
+            for t in data["tasks"]: lines.append(f"• {t['name']} ({t['points']} pts)")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        elif text == "📊 Son's progress":
+            streak = data.get("morning_streak", 0)
+            pending = len([h for h in data["history"] if h.get("status") == "pending"])
+            await update.message.reply_text(
+                f"<b>📊 Progress Report</b>\n\n"
+                f"💰 Total Points: <b>{data['points']}</b>\n"
+                f"🔥 Morning Streak: <b>{streak} days</b>\n"
+                f"⏳ Pending Approvals: <b>{pending}</b>", 
+                parse_mode="HTML"
+            )
+        elif text == "🔄 Reset today":
+            data["history"] = [h for h in data["history"] if h["date"] != today_str()]
+            save_data(data)
+            await update.message.reply_text("✅ Today's history has been wiped clean.")
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_text(u, c)))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.job_queue.run_daily(lambda c: c.bot.send_message(SON_CHAT_ID, "🏆 <b>Good Morning!</b> Start your missions!"), time=time(3, 0))
     app.run_polling()
-
-async def handle_text(update, context):
-    text = update.message.text
-    if is_son(update):
-        if text == "☀️ Morning Missions": await mark_done_prompt(update, context, "morning")
-        elif text == "🌙 Evening & Study": await mark_done_prompt(update, context, "evening")
-        elif text.startswith("✔ "): await handle_submission(update, context)
-    elif is_parent(update):
-        if text == "✅ Approve Tasks": await approve_tasks_menu(update, context)
 
 if __name__ == "__main__": main()
