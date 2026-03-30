@@ -1,5 +1,6 @@
 """
-ChampBot - Telegram bot to track daily activities and reward points
+ChampBot - Final Version (Seychelles Edition)
+Includes: 21 Tasks, Photo Proof, Exercise Penalties, and Streak Bonuses.
 """
 
 import json
@@ -8,16 +9,13 @@ import logging
 from datetime import datetime, time
 from pathlib import Path
 
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
-    ContextTypes, filters, JobQueue
+    CallbackQueryHandler, ContextTypes, filters, JobQueue
 )
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
@@ -26,612 +24,190 @@ PARENT_CHAT_ID = int(os.environ.get("PARENT_CHAT_ID", "0"))
 SON_CHAT_ID    = int(os.environ.get("SON_CHAT_ID",    "0"))
 DATA_FILE      = Path("data.json")
 
+# Task Definitions
+PHOTO_REQUIRED_IDS = ["exercise", "ev_exercise", "homework", "uniform", "cleanliness"]
+MORNING_IDS = ["waking", "teeth", "exercise", "toilet", "uniform", "cleanliness", "to_school"]
+EVENING_IDS = ["fromschool", "homework", "v_english", "french", "w_english", "maths", "science", "history", "geo", "ict", "w_french", "reading", "ev_exercise", "chores"]
+
 DEFAULT_TASKS = [
-    {"id": "homework", "name": "📚 Homework / Studies",      "points": 20, "emoji": "📚"},
-    {"id": "exercise", "name": "🏃 Physical Exercise",        "points": 15, "emoji": "🏃"},
-    {"id": "chores",   "name": "🧹 Chores / Household Tasks", "points": 10, "emoji": "🧹"},
-    {"id": "reading",  "name": "📖 Reading / Learning",       "points": 15, "emoji": "📖"},
-    {"id": "teeth",    "name": "🦷 Brushing Teeth",           "points": 5,  "emoji": "🦷"},
+    {"id": "waking",      "name": "🌅 Waking up @ 5am",                "points": 15},
+    {"id": "teeth",       "name": "🦷 Brushing teeth",                 "points": 15},
+    {"id": "exercise",    "name": "🏃 Morning exercise",                "points": 15},
+    {"id": "toilet",      "name": "🚿 Loo & Shower",                   "points": 15},
+    {"id": "uniform",     "name": "👔 Ironing uniform",                "points": 15},
+    {"id": "cleanliness", "name": "🧼 Apply oil/clean shoe/wash socks", "points": 15},
+    {"id": "to_school",   "name": "🏫 Leave home to school by 7:10am",  "points": 15},
+    {"id": "fromschool",  "name": "🍱 Keep uniform/clean lunch box",     "points": 15},
+    {"id": "homework",    "name": "📚 Homework",                       "points": 15},
+    {"id": "v_english",   "name": "🔤 English Vocabulary",             "points": 15},
+    {"id": "french",      "name": "🥖 Learning French",                "points": 15},
+    {"id": "w_english",   "name": "✍️ Writing English",                "points": 15},
+    {"id": "maths",       "name": "🔢 Maths",                          "points": 15},
+    {"id": "science",     "name": "🧪 Science",                        "points": 15},
+    {"id": "history",     "name": "📜 History",                        "points": 15},
+    {"id": "geo",         "name": "🌍 Geography",                      "points": 15},
+    {"id": "ict",         "name": "💻 ICT",                            "points": 15},
+    {"id": "w_french",    "name": "📝 Writing French",                 "points": 15},
+    {"id": "reading",     "name": "📖 Reading 10 pages",               "points": 15},
+    {"id": "ev_exercise", "name": "🚴 Evening Exercise",               "points": 15},
+    {"id": "chores",      "name": "🧹 Chores / Household Tasks",       "points": 10},
 ]
 
 DEFAULT_REWARDS = [
-    {"id": "screen30", "name": "📱 30 min extra screen time", "cost": 30},
-    {"id": "screen60", "name": "📱 1 hour extra screen time", "cost": 55},
-    {"id": "movie",    "name": "🎬 Movie night pick",         "cost": 100},
-    {"id": "treat",    "name": "🍕 Favourite meal / treat",   "cost": 80},
-    {"id": "cash50",   "name": "💵 50 cents cash",            "cost": 40},
-    {"id": "cash100",  "name": "💵 $1.00 cash",               "cost": 75},
-    {"id": "gameday",  "name": "🎮 Full game day (weekend)",  "cost": 200},
+    {"id": "screen30", "name": "📱 30 min extra screen time", "cost": 150},
+    {"id": "screen60", "name": "📱 1 hour extra screen time", "cost": 250},
+    {"id": "movie",    "name": "🎬 Favorite movie",           "cost": 450},
+    {"id": "treat",    "name": "🍕 Favourite meal / treat",   "cost": 600},
+    {"id": "cash5",    "name": "💵 5 SCR cash",               "cost": 200},
+    {"id": "cash10",   "name": "💵 10 SCR cash",              "cost": 350},
+    {"id": "gameday",  "name": "🎮 Full game day (weekend)",  "cost": 1800},
 ]
 
 def load_data():
     if DATA_FILE.exists():
-        with open(DATA_FILE) as f:
-            return json.load(f)
-    return {
-        "tasks": DEFAULT_TASKS,
-        "rewards": DEFAULT_REWARDS,
-        "points": 0,
-        "history": [],
-        "redemptions": [],
-        "streak": 0,
-        "last_full_day": None,
-    }
+        with open(DATA_FILE) as f: return json.load(f)
+    return {"tasks": DEFAULT_TASKS, "rewards": DEFAULT_REWARDS, "points": 0, "history": [], "morning_streak": 0}
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2, default=str)
+    with open(DATA_FILE, "w") as f: json.dump(data, f, indent=2, default=str)
 
-def today_str():
-    return datetime.now().strftime("%Y-%m-%d")
-
-def today_completed(data):
-    return [h["task_id"] for h in data["history"] if h["date"] == today_str()]
-
-def all_tasks_done_today(data):
-    done = today_completed(data)
-    return all(t["id"] in done for t in data["tasks"])
+# --- Helper Functions ---
+def is_parent(update): return update.effective_chat.id == PARENT_CHAT_ID
+def is_son(update): return update.effective_chat.id == SON_CHAT_ID
+def today_str(): return datetime.now().strftime("%Y-%m-%d")
 
 def son_main_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("✅ Mark task done"), KeyboardButton("📊 My points")],
-        [KeyboardButton("🎁 Rewards"),        KeyboardButton("📅 Today's tasks")],
-        [KeyboardButton("🏆 My streak"),      KeyboardButton("📜 History")],
+        [KeyboardButton("☀️ Morning Missions"), KeyboardButton("🌙 Evening & Study")],
+        [KeyboardButton("📊 My points"), KeyboardButton("🏆 My streak")],
+        [KeyboardButton("🎁 Rewards"), KeyboardButton("📜 History")],
     ], resize_keyboard=True)
 
 def parent_main_keyboard():
     return ReplyKeyboardMarkup([
-        [KeyboardButton("📋 View all tasks"),    KeyboardButton("➕ Add task")],
-        [KeyboardButton("🎁 Manage rewards"),    KeyboardButton("✏️ Edit points")],
-        [KeyboardButton("📊 Son's progress"),    KeyboardButton("✅ Approve redemptions")],
-        [KeyboardButton("📅 Set reminder time"), KeyboardButton("🔄 Reset today")],
+        [KeyboardButton("✅ Approve Tasks"), KeyboardButton("📊 Son's progress")],
+        [KeyboardButton("📋 View all tasks"), KeyboardButton("🔄 Reset today")]
     ], resize_keyboard=True)
 
-def is_parent(update):
-    return update.effective_chat.id == PARENT_CHAT_ID
-
-def is_son(update):
-    return update.effective_chat.id == SON_CHAT_ID
-
-async def notify_parent(context, msg):
-    if PARENT_CHAT_ID:
-        await context.bot.send_message(PARENT_CHAT_ID, msg, parse_mode="HTML")
-
-async def notify_son(context, msg):
-    if SON_CHAT_ID:
-        await context.bot.send_message(SON_CHAT_ID, msg, parse_mode="HTML")
-
+# --- Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    name    = update.effective_user.first_name
     if chat_id == PARENT_CHAT_ID:
-        await update.message.reply_text(
-            "<b>🏆 ChampBot — Parent Panel</b>\n\n"
-            "Welcome back! Use the buttons below to manage "
-            "tasks, rewards and track your son's progress.",
-            parse_mode="HTML",
-            reply_markup=parent_main_keyboard()
-        )
+        await update.message.reply_text("<b>🏆 Parent Panel Active</b>", parse_mode="HTML", reply_markup=parent_main_keyboard())
     elif chat_id == SON_CHAT_ID:
-        data = load_data()
-        await update.message.reply_text(
-            "<b>🏆 Welcome to ChampBot, " + name + "!</b>\n\n"
-            "Complete your daily tasks, earn points and\n"
-            "unlock real rewards! 🎯\n\n"
-            "💰 Your balance: <b>" + str(data["points"]) + " pts</b>\n\n"
-            "Tap a button below to get started, Champ! 💪",
-            parse_mode="HTML",
-            reply_markup=son_main_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            "<b>🏆 ChampBot</b>\n\n"
-            "Your Chat ID is: <code>" + str(chat_id) + "</code>\n\n"
-            "Send this number to the parent to finish setup.",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("<b>🏆 Welcome Champ!</b>", parse_mode="HTML", reply_markup=son_main_keyboard())
 
-async def show_today_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
+async def mark_done_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
     data = load_data()
-    done = today_completed(data)
-    lines = ["<b>📅 Today's Tasks</b>\n"]
-    for t in data["tasks"]:
-        status = "✅" if t["id"] in done else "⬜"
-        lines.append(status + " " + t["name"] + "  <i>(+" + str(t["points"]) + " pts)</i>")
-    remaining = sum(t["points"] for t in data["tasks"] if t["id"] not in done)
-    lines.append("\n💰 You can still earn <b>" + str(remaining) + " pts</b> today!")
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-async def mark_done_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    data    = load_data()
-    done    = today_completed(data)
-    pending = [t for t in data["tasks"] if t["id"] not in done]
+    done = [h["task_id"] for h in data["history"] if h["date"] == today_str() and h["status"] != "denied"]
+    ids = MORNING_IDS if cat == "morning" else EVENING_IDS
+    pending = [t for t in data["tasks"] if t["id"] in ids and t["id"] not in done]
+    
     if not pending:
-        await update.message.reply_text(
-            "🎉 You've completed ALL tasks today! Amazing work!\n"
-            "Total points so far: <b>" + str(data["points"]) + "</b>",
-            parse_mode="HTML"
-        )
+        await update.message.reply_text("🎉 All tasks in this category are complete!", reply_markup=son_main_keyboard())
         return
+
     buttons = [[KeyboardButton("✔ " + t["name"])] for t in pending]
     buttons.append([KeyboardButton("🔙 Back")])
-    await update.message.reply_text(
-        "Which task did you complete? 👇",
-        reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True)
-    )
+    await update.message.reply_text("Select task:", reply_markup=ReplyKeyboardMarkup(buttons, resize_keyboard=True))
 
-async def handle_task_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    text = update.message.text
-
-    if text == "🔙 Back":
-        await update.message.reply_text("OK!", reply_markup=son_main_keyboard())
-        return
-
-    if not text.startswith("✔ "):
-        return
-
-    task_name = text[2:].strip()
-
-    # Always load fresh data to prevent stale reads
+async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text[2:].strip()
     data = load_data()
-    done = today_completed(data)
+    matched = next((t for t in data["tasks"] if t["name"] == text), None)
+    
+    if matched:
+        if matched["id"] in PHOTO_REQUIRED_IDS:
+            context.user_data["pending_task"] = matched
+            await update.message.reply_text(f"📸 This task requires a photo! Please send a photo of your {matched['name']} now.")
+        else:
+            await submit_to_parent(update, context, matched)
 
-    matched = next((t for t in data["tasks"] if t["name"] == task_name), None)
-    if not matched:
-        await update.message.reply_text(
-            "Hmm, I did not recognise that task. Try again!",
-            reply_markup=son_main_keyboard()
-        )
-        return
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_son(update) or "pending_task" not in context.user_data: return
+    task = context.user_data.pop("pending_task")
+    photo_id = update.message.photo[-1].file_id
+    await submit_to_parent(update, context, task, photo_id)
 
-    # Duplicate guard — blocks multiple submissions of the same task
-    if matched["id"] in done:
-        await update.message.reply_text(
-            "🚫 <b>" + matched["name"] + "</b> is already done today!\n"
-            "No extra points — one task per day, Champ! 😄",
-            parse_mode="HTML",
-            reply_markup=son_main_keyboard()
-        )
-        return
+async def submit_to_parent(update, context, task, photo_id=None):
+    data = load_data()
+    # Calculate Points with Penalties
+    final_pts = task["points"]
+    now_hour = datetime.now().hour
+    now_min = datetime.now().minute
+    
+    if task["id"] == "exercise" and (now_hour > 6 or (now_hour == 6 and now_min > 30)):
+        final_pts = 5
+        await update.message.reply_text("⚠️ Late morning exercise! Points reduced to 5.")
+    elif task["id"] == "ev_exercise" and now_hour >= 20 and now_min >= 30:
+        final_pts = 5
+        await update.message.reply_text("⚠️ Late evening exercise! Points reduced to 5.")
 
-    # Award points
-    data["history"].append({
-        "date":      today_str(),
-        "task_id":   matched["id"],
-        "task_name": matched["name"],
-        "points":    matched["points"],
-    })
-    data["points"] += matched["points"]
-
-    # Streak check
-    streak_msg = ""
-    if all_tasks_done_today(data):
-        data["streak"]        = data.get("streak", 0) + 1
-        data["last_full_day"] = today_str()
-        streak_msg = (
-            "\n\n🔥 <b>STREAK: " + str(data["streak"]) +
-            " day(s) in a row!</b> Keep it up!"
-        )
-        await notify_parent(
-            context,
-            "🎉 Your son completed ALL tasks today!\n"
-            "Streak: " + str(data["streak"]) + " day(s) 🔥"
-        )
-
+    submission = {
+        "date": today_str(), "task_id": task["id"], "task_name": task["name"],
+        "points": final_pts, "status": "pending", "photo": photo_id
+    }
+    data["history"].append(submission)
     save_data(data)
+    await update.message.reply_text("✅ Sent to Dad for approval!", reply_markup=son_main_keyboard())
+    if PARENT_CHAT_ID:
+        msg = f"🔔 <b>{task['name']}</b> submitted for approval."
+        if photo_id: await context.bot.send_photo(PARENT_CHAT_ID, photo_id, caption=msg, parse_mode="HTML")
+        else: await context.bot.send_message(PARENT_CHAT_ID, msg, parse_mode="HTML")
 
-    await update.message.reply_text(
-        matched["emoji"] + " <b>" + matched["name"] + "</b> done! ✅\n"
-        "+" + str(matched["points"]) + " points awarded!\n"
-        "💰 Total: <b>" + str(data["points"]) + " pts</b>" + streak_msg,
-        parse_mode="HTML",
-        reply_markup=son_main_keyboard()
-    )
-    await notify_parent(
-        context,
-        "✅ <b>" + matched["name"] + "</b> marked done by your son.\n"
-        "Points: +" + str(matched["points"]) + " | Total: " + str(data["points"])
-    )
-
-async def show_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    data         = load_data()
-    done_today   = today_completed(data)
-    earned_today = sum(h["points"] for h in data["history"] if h["date"] == today_str())
-    await update.message.reply_text(
-        "<b>💰 Your Points</b>\n\n"
-        "🏦 Total balance: <b>" + str(data["points"]) + " pts</b>\n"
-        "📅 Earned today: <b>" + str(earned_today) + " pts</b>\n"
-        "✅ Tasks done today: " + str(len(done_today)) + " / " + str(len(data["tasks"])),
-        parse_mode="HTML"
-    )
-
-async def show_streak(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    data   = load_data()
-    streak = data.get("streak", 0)
-    emojis = "🔥" * min(streak, 10) if streak else "❄️"
-    if streak == 0:
-        note = "Complete all tasks today to start your streak!"
-    elif streak < 3:
-        note = "Good start, Champ! Keep going!"
-    elif streak < 7:
-        note = "You are on a roll! 🚀 Real champions do not stop!"
-    else:
-        note = "Incredible consistency! You are a true Champ! 🏆💪"
-    await update.message.reply_text(
-        "<b>🏆 Your Streak</b>\n\n"
-        + emojis + "\n"
-        "<b>" + str(streak) + " day(s)</b> with all tasks completed!\n\n"
-        + note,
-        parse_mode="HTML"
-    )
-
-async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    data   = load_data()
-    recent = sorted(data["history"], key=lambda h: h["date"], reverse=True)[:15]
-    if not recent:
-        await update.message.reply_text("No history yet. Complete some tasks! 💪")
-        return
-    lines = ["<b>📜 Recent Activity</b>\n"]
-    for h in recent:
-        lines.append(
-            "• " + h["date"] + "  " + h["task_name"] +
-            "  <i>+" + str(h["points"]) + " pts</i>"
-        )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-async def show_rewards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    data  = load_data()
-    pts   = data["points"]
-    lines = ["<b>🎁 Rewards</b>  (You have <b>" + str(pts) + " pts</b>)\n"]
-    for r in data["rewards"]:
-        icon = "✅" if pts >= r["cost"] else "🔒"
-        lines.append(icon + " " + r["name"] + "  — <b>" + str(r["cost"]) + " pts</b>")
-    lines.append(
-        "\nTo redeem, type:\n"
-        "<code>/redeem reward_id</code>\n"
-        "e.g. <code>/redeem screen30</code>"
-    )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-async def redeem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_son(update):
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: <code>/redeem reward_id</code>\n"
-            "See IDs with the 🎁 Rewards button.",
-            parse_mode="HTML"
-        )
-        return
-    reward_id = context.args[0].lower()
-    data      = load_data()
-    reward    = next((r for r in data["rewards"] if r["id"] == reward_id), None)
-    if not reward:
-        await update.message.reply_text("I do not know that reward ID. Check the 🎁 Rewards list.")
-        return
-    if data["points"] < reward["cost"]:
-        short = reward["cost"] - data["points"]
-        await update.message.reply_text(
-            "You need <b>" + str(reward["cost"]) + " pts</b> for this reward.\n"
-            "You are <b>" + str(short) + " pts</b> short. Keep going! 💪",
-            parse_mode="HTML"
-        )
-        return
-    data["points"] -= reward["cost"]
-    data["redemptions"].append({
-        "date":        today_str(),
-        "reward_id":   reward["id"],
-        "reward_name": reward["name"],
-        "cost":        reward["cost"],
-        "approved":    False,
-    })
-    save_data(data)
-    await update.message.reply_text(
-        "🎉 Redemption request sent!\n\n"
-        "<b>" + reward["name"] + "</b> — " + str(reward["cost"]) + " pts deducted.\n"
-        "Remaining: <b>" + str(data["points"]) + " pts</b>\n\n"
-        "Waiting for parent to approve! ⏳",
-        parse_mode="HTML"
-    )
-    await notify_parent(
-        context,
-        "🎁 <b>Redemption request!</b>\n\n"
-        "Your son wants: <b>" + reward["name"] + "</b>\n"
-        "Cost: " + str(reward["cost"]) + " pts\n\n"
-        "Use /approve or /deny to respond."
-    )
-
-async def parent_progress(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    data    = load_data()
-    done    = today_completed(data)
-    earned  = sum(h["points"] for h in data["history"] if h["date"] == today_str())
-    pending = [r for r in data["redemptions"] if not r["approved"]]
-    lines = [
-        "<b>📊 Son's Progress</b>\n",
-        "💰 Total points: <b>" + str(data["points"]) + "</b>",
-        "🔥 Current streak: <b>" + str(data.get("streak", 0)) + " day(s)</b>",
-        "📅 Tasks done today: <b>" + str(len(done)) + " / " + str(len(data["tasks"])) + "</b>",
-        "🏆 Points earned today: <b>" + str(earned) + "</b>",
-    ]
-    if pending:
-        lines.append("\n⚠️ Pending redemptions: <b>" + str(len(pending)) + "</b>")
-        for r in pending:
-            lines.append(
-                "  • " + r["reward_name"] + " (" + str(r["cost"]) + " pts) — " + r["date"]
-            )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-async def approve_redemption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    data    = load_data()
-    pending = [r for r in data["redemptions"] if not r["approved"]]
+async def approve_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    pending = [h for h in data["history"] if h.get("status") == "pending"]
     if not pending:
-        await update.message.reply_text("No pending redemptions! ✅")
+        await update.message.reply_text("No tasks waiting! ✨")
         return
-    r = pending[0]
-    r["approved"] = True
+    for h in pending:
+        cb_id = f"{h['task_id']}_{h['date']}"
+        keyboard = [[InlineKeyboardButton("✅ Approve", callback_data=f"app_{cb_id}"), 
+                     InlineKeyboardButton("❌ Deny", callback_data=f"rej_{cb_id}")]]
+        await update.message.reply_text(f"📌 {h['task_name']} ({h['points']} pts)", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    action, t_id, t_date = query.data.split("_")
+    data = load_data()
+    for h in data["history"]:
+        if h["task_id"] == t_id and h["date"] == t_date and h["status"] == "pending":
+            if action == "app":
+                h["status"] = "approved"
+                data["points"] += h["points"]
+                # Streak Logic
+                done_today = [x["task_id"] for x in data["history"] if x["date"] == today_str() and x["status"] == "approved"]
+                if all(m in done_today for m in MORNING_IDS):
+                    data["morning_streak"] = data.get("morning_streak", 0) + 1
+                    if data["morning_streak"] == 5:
+                        data["points"] += 50
+                        data["morning_streak"] = 0
+                        await context.bot.send_message(SON_CHAT_ID, "🔥 <b>5-DAY STREAK! +50 Bonus Points!</b>", parse_mode="HTML")
+                await query.edit_message_text(f"✅ Approved: {h['task_name']}")
+            else:
+                h["status"] = "denied"
+                await query.edit_message_text(f"❌ Denied: {h['task_name']}")
+            break
     save_data(data)
-    await update.message.reply_text(
-        "✅ Approved: <b>" + r["reward_name"] + "</b>", parse_mode="HTML"
-    )
-    await notify_son(
-        context,
-        "🎉 Parent approved your reward!\n\n"
-        "<b>" + r["reward_name"] + "</b> is yours! Enjoy! 🥳"
-    )
-
-async def deny_redemption(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    data    = load_data()
-    pending = [r for r in data["redemptions"] if not r["approved"]]
-    if not pending:
-        await update.message.reply_text("No pending redemptions.")
-        return
-    r = pending[0]
-    data["redemptions"].remove(r)
-    data["points"] += r["cost"]
-    save_data(data)
-    await update.message.reply_text(
-        "❌ Denied: <b>" + r["reward_name"] + "</b>. Points refunded.", parse_mode="HTML"
-    )
-    await notify_son(
-        context,
-        "❌ Your redemption for <b>" + r["reward_name"] + "</b> was not approved.\n"
-        "Your points have been refunded. Keep trying! 💪"
-    )
-
-async def edit_points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: <code>/points +50</code> or <code>/points -20</code>",
-            parse_mode="HTML"
-        )
-        return
-    try:
-        delta = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text(
-            "Please use a number like <code>+50</code> or <code>-20</code>",
-            parse_mode="HTML"
-        )
-        return
-    data           = load_data()
-    data["points"] = max(0, data["points"] + delta)
-    save_data(data)
-    sign = "+" if delta >= 0 else ""
-    await update.message.reply_text(
-        "Points updated: " + sign + str(delta) + "\n"
-        "New total: <b>" + str(data["points"]) + "</b>",
-        parse_mode="HTML"
-    )
-    await notify_son(
-        context,
-        "💰 Your parent updated your points: " + sign + str(delta) + "\n"
-        "New total: <b>" + str(data["points"]) + " pts</b>"
-    )
-
-async def parent_view_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    data  = load_data()
-    lines = ["<b>📋 Current Tasks</b>\n"]
-    lines.append("<i>ID (for commands) — Task name — Points</i>\n")
-    for t in data["tasks"]:
-        lines.append(
-            "• ID: <code>" + t["id"] + "</code>\n"
-            "  " + t["name"] + "  — <b>" + str(t["points"]) + " pts</b>"
-        )
-    lines.append(
-        "\n<b>Commands:</b>\n"
-        "Add:    <code>/addtask id|Name|points</code>\n"
-        "Remove: <code>/removetask id</code>\n\n"
-        "<b>Example:</b>\n"
-        "<code>/addtask piano|🎹 Piano Practice|15</code>\n"
-        "<code>/removetask piano</code>"
-    )
-    await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-
-async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: <code>/addtask id|Name|points</code>\n"
-            "e.g. <code>/addtask piano|🎹 Piano Practice|15</code>",
-            parse_mode="HTML"
-        )
-        return
-    parts = " ".join(context.args).split("|")
-    if len(parts) != 3:
-        await update.message.reply_text(
-            "Format must be: <code>id|Name|points</code>", parse_mode="HTML"
-        )
-        return
-    task_id = parts[0].strip()
-    name    = parts[1].strip()
-    pts     = parts[2].strip()
-    data    = load_data()
-    if any(t["id"] == task_id for t in data["tasks"]):
-        await update.message.reply_text(
-            "Task ID <code>" + task_id + "</code> already exists.", parse_mode="HTML"
-        )
-        return
-    data["tasks"].append({"id": task_id, "name": name, "points": int(pts), "emoji": "⭐"})
-    save_data(data)
-    await update.message.reply_text(
-        "✅ Task added: <b>" + name + "</b> (" + pts + " pts)", parse_mode="HTML"
-    )
-
-async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: <code>/removetask id</code>", parse_mode="HTML"
-        )
-        return
-    task_id = context.args[0]
-    data    = load_data()
-    before  = len(data["tasks"])
-    data["tasks"] = [t for t in data["tasks"] if t["id"] != task_id]
-    if len(data["tasks"]) == before:
-        await update.message.reply_text(
-            "Task <code>" + task_id + "</code> not found.", parse_mode="HTML"
-        )
-        return
-    save_data(data)
-    await update.message.reply_text(
-        "✅ Task <code>" + task_id + "</code> removed.", parse_mode="HTML"
-    )
-
-async def reset_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_parent(update):
-        return
-    data            = load_data()
-    data["history"] = [h for h in data["history"] if h["date"] != today_str()]
-    save_data(data)
-    await update.message.reply_text("✅ Today's completions have been reset.")
-
-async def morning_reminder(context: ContextTypes.DEFAULT_TYPE):
-    data       = load_data()
-    tasks_text = "\n".join(
-        "⬜ " + t["name"] + "  (+" + str(t["points"]) + " pts)"
-        for t in data["tasks"]
-    )
-    if SON_CHAT_ID:
-        await context.bot.send_message(
-            SON_CHAT_ID,
-            "🏆 <b>Good morning, Champ!</b>\n\n"
-            "Here are today's missions:\n\n" + tasks_text + "\n\n"
-            "Complete them all for a full streak day! 🔥\n"
-            "Tap 'Mark task done' each time you finish one. You've got this! 💪",
-            parse_mode="HTML"
-        )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-
-    if is_son(update):
-        if text.startswith("✔ "):
-            await handle_task_selection(update, context)
-        elif text == "✅ Mark task done":
-            await mark_done_prompt(update, context)
-        elif text == "📊 My points":
-            await show_points(update, context)
-        elif text == "🎁 Rewards":
-            await show_rewards(update, context)
-        elif text == "📅 Today's tasks":
-            await show_today_tasks(update, context)
-        elif text == "🏆 My streak":
-            await show_streak(update, context)
-        elif text == "📜 History":
-            await show_history(update, context)
-        elif text == "🔙 Back":
-            await update.message.reply_text("OK!", reply_markup=son_main_keyboard())
-
-    elif is_parent(update):
-        if text == "📋 View all tasks":
-            await parent_view_tasks(update, context)
-        elif text == "📊 Son's progress":
-            await parent_progress(update, context)
-        elif text == "✅ Approve redemptions":
-            await approve_redemption(update, context)
-        elif text == "✏️ Edit points":
-            await update.message.reply_text(
-                "Use <code>/points +50</code> or <code>/points -20</code> to adjust points.",
-                parse_mode="HTML"
-            )
-        elif text == "➕ Add task":
-            data  = load_data()
-            lines = ["<b>➕ Add a New Task</b>\n"]
-            lines.append("Use this command format:\n")
-            lines.append("<code>/addtask id|Name|points</code>\n")
-            lines.append("<b>Rules:</b>")
-            lines.append("• ID must be one word, no spaces (e.g. <code>piano</code>)")
-            lines.append("• Name can include emoji (e.g. 🎹 Piano Practice)")
-            lines.append("• Points must be a number\n")
-            lines.append("<b>Examples:</b>")
-            lines.append("<code>/addtask piano|🎹 Piano Practice|15</code>")
-            lines.append("<code>/addtask prayer|🤲 Evening Prayer|10</code>")
-            lines.append("<code>/addtask shower|🚿 Shower|10</code>\n")
-            lines.append("<b>Current task IDs (already in use):</b>")
-            for t in data["tasks"]:
-                lines.append("• <code>" + t["id"] + "</code>  " + t["name"])
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-        elif text == "🔄 Reset today":
-            await reset_today(update, context)
-        elif text == "🎁 Manage rewards":
-            data  = load_data()
-            lines = ["<b>🎁 Current Rewards</b>\n"]
-            for r in data["rewards"]:
-                lines.append(
-                    "• <code>" + r["id"] + "</code>  " + r["name"] +
-                    "  — " + str(r["cost"]) + " pts"
-                )
-            lines.append("\nTo add: <code>/addreward id|Name|cost</code>")
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start",      start))
-    app.add_handler(CommandHandler("redeem",     redeem))
-    app.add_handler(CommandHandler("approve",    approve_redemption))
-    app.add_handler(CommandHandler("deny",       deny_redemption))
-    app.add_handler(CommandHandler("points",     edit_points))
-    app.add_handler(CommandHandler("addtask",    add_task))
-    app.add_handler(CommandHandler("removetask", remove_task))
-    app.add_handler(CommandHandler("tasks",      parent_view_tasks))
-    app.add_handler(CommandHandler("progress",   parent_progress))
-    app.add_handler(CommandHandler("reset",      reset_today))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    # Morning reminder — 03:00 UTC = 07:00 Seychelles time (UTC+4)
-    job_queue: JobQueue = app.job_queue
-    job_queue.run_daily(morning_reminder, time=time(3, 0, 0))
-
-    logger.info("ChampBot is running! 🏆")
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: handle_text(u, c)))
+    app.job_queue.run_daily(lambda c: c.bot.send_message(SON_CHAT_ID, "🏆 <b>Good Morning!</b> Start your missions!"), time=time(3, 0))
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
+async def handle_text(update, context):
+    text = update.message.text
+    if is_son(update):
+        if text == "☀️ Morning Missions": await mark_done_prompt(update, context, "morning")
+        elif text == "🌙 Evening & Study": await mark_done_prompt(update, context, "evening")
+        elif text.startswith("✔ "): await handle_submission(update, context)
+    elif is_parent(update):
+        if text == "✅ Approve Tasks": await approve_tasks_menu(update, context)
+
+if __name__ == "__main__": main()
