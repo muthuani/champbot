@@ -1,5 +1,5 @@
 """
-ChampBot - The Master Version
+ChampBot - The Master Version (Formatting Fixed)
 Includes: Categories, Photo Proof, Penalties, Streaks, Approvals, Redemptions, and Parent Controls.
 """
 
@@ -163,7 +163,7 @@ async def submit_to_parent(update, context, task, photo_id=None):
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_son(update): return
     if not context.args:
-        await update.message.reply_text("Usage: `/redeem [reward_id]`\nCheck the 🎁 Rewards button for IDs.", parse_mode="Markdown")
+        await update.message.reply_text("Usage: <code>/redeem [reward_id]</code>\nCheck the 🎁 Rewards button for IDs.", parse_mode="HTML")
         return
     
     reward_id = context.args[0].lower()
@@ -188,7 +188,7 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(f"🎉 Requested <b>{reward['name']}</b>! Waiting for Dad's approval.", parse_mode="HTML")
     if PARENT_CHAT_ID:
-        await context.bot.send_message(PARENT_CHAT_ID, f"🎁 <b>Reward Request!</b>\nDhakshan wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML")
+        await context.bot.send_message(PARENT_CHAT_ID, f"🎁 <b>Reward Request!</b>\nChamp wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML")
 
 # --- Parent Approvals (Tasks & Rewards) ---
 async def approve_tasks_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,7 +266,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def edit_points_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_parent(update): return
     if not context.args:
-        await update.message.reply_text("Usage: `/points +50` or `/points -20`", parse_mode="Markdown")
+        await update.message.reply_text("Usage: <code>/points +50</code> or <code>/points -20</code>", parse_mode="HTML")
         return
     try:
         delta = int(context.args[0])
@@ -282,11 +282,11 @@ async def edit_points_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_parent(update): return
     if not context.args:
-        await update.message.reply_text("Usage: `/addtask id|Name|points`\nExample: `/addtask homework|📚 Homework|20`", parse_mode="Markdown")
+        await update.message.reply_text("Usage: <code>/addtask id|Name|points</code>\nExample: <code>/addtask homework|📚 Homework|20</code>", parse_mode="HTML")
         return
     parts = " ".join(context.args).split("|")
     if len(parts) != 3:
-        await update.message.reply_text("Format must be: `id|Name|points`", parse_mode="Markdown")
+        await update.message.reply_text("Format must be: <code>id|Name|points</code>", parse_mode="HTML")
         return
     
     t_id, t_name, t_pts = parts[0].strip(), parts[1].strip(), int(parts[2].strip())
@@ -311,7 +311,7 @@ async def remove_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     data["tasks"] = [t for t in data["tasks"] if t["id"] != t_id]
     save_data(data)
-    await update.message.reply_text(f"✅ Task `{t_id}` removed.", parse_mode="Markdown")
+    await update.message.reply_text(f"✅ Task <code>{t_id}</code> removed.", parse_mode="HTML")
 
 # --- Text Handler Menu ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -334,8 +334,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for r in data["rewards"]:
                 icon = "✅" if data["points"] >= r["cost"] else "🔒"
                 lines.append(f"{icon} <code>{r['id']}</code> - {r['name']} ({r['cost']} pts)")
-            lines.append("\n<b>To claim a reward, type:</b>\n`/redeem id`\nExample: `/redeem cash5`")
-            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            lines.append("\n<b>To claim a reward, type:</b>\n<code>/redeem id</code>\nExample: <code>/redeem cash5</code>")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         elif text == "📜 History":
             recent = sorted(data["history"], key=lambda h: h["date"], reverse=True)[:15]
             if not recent: await update.message.reply_text("No history yet! 💪")
@@ -369,9 +369,9 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "✏️ Edit Tasks/Points":
             msg = (
                 "<b>⚙️ Parent Commands</b>\n\n"
-                "<b>Edit/Add a Task:</b>\n`/addtask id|Name|points`\n"
-                "<b>Remove a Task:</b>\n`/removetask id`\n\n"
-                "<b>Give/Take Points directly:</b>\n`/points +50` or `/points -20`"
+                "<b>Edit/Add a Task:</b>\n<code>/addtask id|Name|points</code>\n"
+                "<b>Remove a Task:</b>\n<code>/removetask id</code>\n\n"
+                "<b>Give/Take Points directly:</b>\n<code>/points +50</code> or <code>/points -20</code>"
             )
             await update.message.reply_text(msg, parse_mode="HTML")
         elif text == "🔄 Reset today":
