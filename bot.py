@@ -1,7 +1,7 @@
 import json
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
@@ -80,12 +80,12 @@ def son_main_keyboard():
     return ReplyKeyboardMarkup([
         [KeyboardButton("☀️ Morning Missions"), KeyboardButton("🌙 Evening & Study")],
         [KeyboardButton("📊 My Points"), KeyboardButton("🎁 Rewards")],
-        [KeyboardButton("📜 History")]
+        [KeyboardButton("📜 History"), KeyboardButton("⚖️ Rules")]
     ], resize_keyboard=True)
 
 def parent_main_keyboard():
+    # Streamlined: Removed "Approve Tasks/Rewards" buttons
     return ReplyKeyboardMarkup([
-        [KeyboardButton("✅ Approve Tasks"), KeyboardButton("🎁 Approve Rewards")],
         [KeyboardButton("⚙️ Manage Tasks"), KeyboardButton("🎡 Manage Rewards")],
         [KeyboardButton("📈 Weekly Progress"), KeyboardButton("🔄 Reset Today")]
     ], resize_keyboard=True)
@@ -131,7 +131,6 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"You need {reward['cost']} pts. You are short by {reward['cost'] - data['points']} pts! 💪")
         return
 
-    # Deduct & Send to Pending
     data["points"] -= reward["cost"]
     data.setdefault("redemptions", []).append({
         "date": today_str(), "reward_id": reward["id"], "reward_name": reward["name"], "cost": reward["cost"], "status": "pending"
@@ -154,7 +153,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     uid = update.effective_user.id
 
-    # -- SON: CONFIRM TASK --
     if action == "confirm":
         t_id = parts[1]
         task = next((t for t in data["tasks"] if t["id"] == t_id), None)
@@ -163,7 +161,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
               [InlineKeyboardButton("❌ Oops, Go Back", callback_data="cancel_sub")]]
         await query.edit_message_text(f"Confirming: <b>{task['name']}</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-    # -- SON: SUBMIT TASK (PENALTY MATH HAPPENS HERE) --
     elif action == "submit":
         t_id = parts[1]
         task = next(t for t in data["tasks"] if t["id"] == t_id)
@@ -173,7 +170,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             d_time = datetime.strptime(task.get("deadline", "23:59"), "%H:%M").time()
             deadline_dt = now.replace(hour=d_time.hour, minute=d_time.minute, second=0, microsecond=0)
         except ValueError:
-            deadline_dt = now # Failsafe
+            deadline_dt = now
         
         pts = task["points"]
         status_txt = "On Time! ✅"
@@ -196,16 +193,14 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    InlineKeyboardButton("❌ Deny", callback_data=f"p_rej|T|{t_id}|{today_str()}")]]
             await context.bot.send_message(pid, f"🔔 <b>New Task</b>\n{task['name']}\nStatus: {status_txt}\nPoints: {pts}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-    # -- SON: CANCEL SUBMISSION --
     elif action == "cancel_sub":
         await query.edit_message_text("Action cancelled. Use the menu below.")
 
-    # -- PARENTS: APPROVE/DENY TASKS & REWARDS --
     elif action.startswith("p_") and is_parent(uid):
         act, itype, iid, idate = parts[0], parts[1], parts[2], parts[3]
         parent_name = update.effective_user.first_name
 
-        if itype == "T": # TASK APPROVAL
+        if itype == "T":
             for h in data["history"]:
                 if h["task_id"] == iid and h["date"] == idate and h["status"] == "pending":
                     if act == "p_app":
@@ -218,7 +213,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await query.edit_message_text(f"❌ Denied by {parent_name}")
                     break
                     
-        elif itype == "R": # REWARD APPROVAL
+        elif itype == "R":
             for r in data.get("redemptions", []):
                 if r["reward_id"] == iid and r["date"] == idate and r["status"] == "pending":
                     if act == "p_app":
@@ -227,7 +222,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(SON_CHAT_ID, f"🎉 Reward approved: <b>{r['reward_name']}</b>! Enjoy! 🥳", parse_mode="HTML")
                     else:
                         r["status"] = "denied"
-                        data["points"] += r["cost"] # Refund!
+                        data["points"] += r["cost"]
                         await query.edit_message_text(f"❌ Denied & Refunded by {parent_name}: {r['reward_name']}")
                         await context.bot.send_message(SON_CHAT_ID, f"❌ Reward denied: <b>{r['reward_name']}</b>. Points refunded.", parse_mode="HTML")
                     break
@@ -251,25 +246,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             hist = data["history"][-10:]
             msg = "<b>📜 Recent Activity:</b>\n" + "\n".join([f"• {h['task_name']} ({h['status']})" for h in hist])
             await update.message.reply_text(msg if hist else "No history yet.", parse_mode="HTML")
+        elif text == "⚖️ Rules":
+            msg = (
+                "<b>⚠️ Mission Rules & Penalties</b>\n\n"
+                "• <b>On Time:</b> 100% Points ✅\n"
+                "• <b>Up to 30 mins late:</b> 50% Points ⚠️\n"
+                "• <b>More than 30 mins late:</b> 2 Points 🐢\n\n"
+                "<i>Keep an eye on the clock, Champ!</i>"
+            )
+            await update.message.reply_text(msg, parse_mode="HTML")
 
     elif is_parent(uid):
-        if text == "✅ Approve Tasks":
-            pending = [h for h in data["history"] if h.get("status") == "pending"]
-            if not pending: await update.message.reply_text("No tasks waiting! ✨")
-            for h in pending:
-                kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"p_app|T|{h['task_id']}|{h['date']}"), 
-                       InlineKeyboardButton("❌ Deny", callback_data=f"p_rej|T|{h['task_id']}|{h['date']}")]]
-                await update.message.reply_text(f"📌 <b>{h['task_name']}</b> ({h['points']} pts)", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-                
-        elif text == "🎁 Approve Rewards":
-            pending = [r for r in data.get("redemptions", []) if r.get("status") == "pending"]
-            if not pending: await update.message.reply_text("No rewards waiting! ✨")
-            for r in pending:
-                kb = [[InlineKeyboardButton("✅ Give Reward", callback_data=f"p_app|R|{r['reward_id']}|{r['date']}"), 
-                       InlineKeyboardButton("❌ Deny & Refund", callback_data=f"p_rej|R|{r['reward_id']}|{r['date']}")]]
-                await update.message.reply_text(f"🎁 <b>{r['reward_name']}</b> ({r['cost']} pts)", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-                
-        elif text == "⚙️ Manage Tasks": 
+        if text == "⚙️ Manage Tasks": 
             msg = "<b>⚙️ Task Management</b>\n<i>Adding an existing ID edits it.</i>\n\n• <b>Add/Edit:</b> `/addtask id|Name|Pts|HH:MM|cat`\n• <b>Delete:</b> `/deltask id`"
             await update.message.reply_text(msg, parse_mode="HTML")
             
@@ -288,7 +276,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎯 Weekly Goal: <b>{goal}</b>\n"
                 f"🚀 Remaining: <b>{max(0, goal - pts)} pts</b>\n\n"
                 f"⏳ Tasks Pending Approval: <b>{pending_t}</b>\n"
-                f"🎁 Rewards Pending Approval: <b>{pending_r}</b>"
+                f"🎁 Rewards Pending Approval: <b>{pending_r}</b>\n\n"
+                f"<i>To change the weekly goal, type:</i>\n`/setgoal 800`"
             )
             await update.message.reply_text(msg, parse_mode="HTML")
             
@@ -298,6 +287,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Today's history has been wiped.")
 
 # --- ADMIN CRUD COMMANDS ---
+async def set_goal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_parent(update.effective_user.id): return
+    if not context.args: return
+    try:
+        data = load_data()
+        data["weekly_goal"] = int(context.args[0])
+        save_data(data)
+        await update.message.reply_text(f"✅ Weekly goal set to {data['weekly_goal']} pts.")
+    except: await update.message.reply_text("Format: `/setgoal 800`")
+
 async def add_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_parent(update.effective_user.id): return
     try:
@@ -338,11 +337,21 @@ async def del_reward_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(data)
     await update.message.reply_text(f"✅ Reward `{r_id}` deleted.", parse_mode="Markdown")
 
+# --- BACKGROUND REMINDERS ---
+async def morning_reminder(context: ContextTypes.DEFAULT_TYPE):
+    if SON_CHAT_ID:
+        await context.bot.send_message(SON_CHAT_ID, "🏆 <b>Good Morning Champ!</b> Don't forget to complete your morning missions before school! 🏫", parse_mode="HTML")
+
+async def evening_reminder(context: ContextTypes.DEFAULT_TYPE):
+    if SON_CHAT_ID:
+        await context.bot.send_message(SON_CHAT_ID, "🌙 <b>Good Evening!</b> Time to knock out that homework and evening studies! 📚", parse_mode="HTML")
+
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("redeem", redeem_command))
+    app.add_handler(CommandHandler("setgoal", set_goal_cmd))
     app.add_handler(CommandHandler("addtask", add_task_cmd))
     app.add_handler(CommandHandler("deltask", del_task_cmd))
     app.add_handler(CommandHandler("addreward", add_reward_cmd))
@@ -350,6 +359,11 @@ def main():
     
     app.add_handler(CallbackQueryHandler(handle_callbacks))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # 02:00 UTC = 06:00 AM Seychelles Time
+    app.job_queue.run_daily(morning_reminder, time=time(2, 0))
+    # 13:00 UTC = 05:00 PM Seychelles Time
+    app.job_queue.run_daily(evening_reminder, time=time(13, 0))
     
     app.run_polling()
 
