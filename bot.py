@@ -152,7 +152,7 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for pid in PARENT_IDS:
         kb = [[InlineKeyboardButton("✅ Give Reward", callback_data=f"p_app|R|{reward['id']}|{today_str()}"),
                InlineKeyboardButton("❌ Deny & Refund", callback_data=f"p_rej|R|{reward['id']}|{today_str()}")]]
-        await context.bot.send_message(pid, f"🎁 <b>Reward Request!</b>\nDhakshan wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+        await context.bot.send_message(pid, f"🎁 <b>Reward Request!</b>\nRajkumar wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
 # --- CALLBACK ROUTER (HANDLES ALL BUTTON CLICKS) ---
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -281,7 +281,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending_t = len([h for h in data["history"] if h.get("status") == "pending"])
             pending_r = len([r for r in data.get("redemptions", []) if r.get("status") == "pending"])
             msg = (
-                f"<b>📊 Dhakshan's Progress</b>\n\n"
+                f"<b>📊 Rajkumar's Progress</b>\n\n"
                 f"💰 Total Points: <b>{pts}</b>\n"
                 f"🎯 Weekly Goal: <b>{goal}</b>\n"
                 f"🚀 Remaining: <b>{max(0, goal - pts)} pts</b>\n\n"
@@ -297,7 +297,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "To add or remove points instantly, type:\n"
                 "• Add 50 points: `/points +50`\n"
                 "• Remove 20 points: `/points -20`\n\n"
-                "<i>Dhakshan will be notified automatically!</i>"
+                "<i>Rajkumar will be notified automatically!</i>"
             )
             await update.message.reply_text(msg, parse_mode="HTML")
             
