@@ -331,4 +331,77 @@ async def set_goal_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["weekly_goal"] = int(context.args[0])
         save_data(data)
         await update.message.reply_text(f"✅ Weekly goal set to {data['weekly_goal']} pts.")
-    except: await update.message.reply_text("Format: `/setgoal 8
+    except: await update.message.reply_text("Format: `/setgoal 800`")
+
+async def add_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_parent(update.effective_user.id): return
+    try:
+        p = " ".join(context.args).split("|")
+        data = load_data()
+        data["tasks"] = [t for t in data["tasks"] if t["id"] != p[0]]
+        data["tasks"].append({"id": p[0], "name": p[1], "points": int(p[2]), "deadline": p[3], "cat": p[4].lower()})
+        save_data(data)
+        await update.message.reply_text(f"✅ Saved Task: {p[1]}")
+    except: await update.message.reply_text("Format: `/addtask id|Name|Pts|HH:MM|cat`")
+
+async def del_task_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_parent(update.effective_user.id): return
+    if not context.args: return
+    t_id = context.args[0]
+    data = load_data()
+    data["tasks"] = [t for t in data["tasks"] if t["id"] != t_id]
+    save_data(data)
+    await update.message.reply_text(f"✅ Task `{t_id}` deleted.", parse_mode="Markdown")
+
+async def add_reward_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_parent(update.effective_user.id): return
+    try:
+        p = " ".join(context.args).split("|")
+        data = load_data()
+        data["rewards"] = [r for r in data["rewards"] if r["id"] != p[0]]
+        data["rewards"].append({"id": p[0], "name": p[1], "cost": int(p[2])})
+        save_data(data)
+        await update.message.reply_text(f"✅ Saved Reward: {p[1]}")
+    except: await update.message.reply_text("Format: `/addreward id|Name|Cost`")
+
+async def del_reward_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_parent(update.effective_user.id): return
+    if not context.args: return
+    r_id = context.args[0]
+    data = load_data()
+    data["rewards"] = [r for r in data["rewards"] if r["id"] != r_id]
+    save_data(data)
+    await update.message.reply_text(f"✅ Reward `{r_id}` deleted.", parse_mode="Markdown")
+
+# --- BACKGROUND REMINDERS ---
+async def morning_reminder(context: ContextTypes.DEFAULT_TYPE):
+    if SON_CHAT_ID:
+        await context.bot.send_message(SON_CHAT_ID, "🏆 <b>Good Morning Champ!</b> Don't forget to complete your morning missions before school! 🏫", parse_mode="HTML")
+
+async def evening_reminder(context: ContextTypes.DEFAULT_TYPE):
+    if SON_CHAT_ID:
+        await context.bot.send_message(SON_CHAT_ID, "🌙 <b>Good Evening!</b> Time to knock out that homework and evening studies! 📚", parse_mode="HTML")
+
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("redeem", redeem_command))
+    app.add_handler(CommandHandler("setgoal", set_goal_cmd))
+    app.add_handler(CommandHandler("points", edit_points_cmd))
+    app.add_handler(CommandHandler("addtask", add_task_cmd))
+    app.add_handler(CommandHandler("deltask", del_task_cmd))
+    app.add_handler(CommandHandler("addreward", add_reward_cmd))
+    app.add_handler(CommandHandler("delreward", del_reward_cmd))
+    
+    app.add_handler(CallbackQueryHandler(handle_callbacks))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    
+    # 02:00 UTC = 06:00 AM Seychelles Time
+    app.job_queue.run_daily(morning_reminder, time=time(2, 0))
+    # 13:00 UTC = 05:00 PM Seychelles Time
+    app.job_queue.run_daily(evening_reminder, time=time(13, 0))
+    
+    app.run_polling()
+
+if __name__ == "__main__": main()
