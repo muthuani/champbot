@@ -16,8 +16,8 @@ try:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        # UPDATED: Using -latest to prevent 404 routing errors
-        ai_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # FIXED: gemini-2.0-flash is the correct current model name
+        ai_model = genai.GenerativeModel('gemini-2.0-flash')
     else:
         ai_model = None
 except ImportError:
@@ -129,7 +129,6 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👨‍🏫 Tutor:\n\n{response.text.strip()}")
     except Exception as e:
         logger.error(f"Tutor Error: {e}")
-        # UPDATED: Will now print the exact API error inside the chat
         await update.message.reply_text(f"Oops, my brain is taking a nap. Ask Mom or Dad for now!\n\n<i>(System Error: {str(e)})</i>", parse_mode="HTML")
 
 # --- SMART PROOF (VISION AI) ---
