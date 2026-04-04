@@ -10,18 +10,27 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
+# --- AI SETUP ---
+try:
+    import google.generativeai as genai
+    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        ai_model = genai.GenerativeModel('gemini-1.5-flash')
+    else:
+        ai_model = None
+except ImportError:
+    ai_model = None
+
 # --- LOGGING ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION (RAILWAY ENV VARIABLES) ---
+# --- CONFIGURATION ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 SON_CHAT_ID = int(os.environ.get("SON_CHAT_ID", "0"))
-
-# Supports comma-separated IDs: "123456789,987654321"
 PARENT_IDS_RAW = os.environ.get("PARENT_IDS", "0")
 PARENT_IDS = [int(i.strip()) for i in PARENT_IDS_RAW.split(",") if i.strip().isdigit()]
-
 DATA_FILE = Path("champ_data.json")
 
 # --- MASTER DATA MODELS ---
@@ -70,7 +79,6 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, "w") as f: json.dump(data, f, indent=2, default=str)
 
-# --- SECURITY HELPERS ---
 def is_parent(user_id): return user_id in PARENT_IDS
 def is_son(user_id): return user_id == SON_CHAT_ID
 def today_str(): return datetime.now().strftime("%Y-%m-%d")
@@ -90,38 +98,70 @@ def parent_main_keyboard():
         [KeyboardButton("🔄 Reset Today")]
     ], resize_keyboard=True)
 
-# --- START COMMAND ---
+# --- START ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     if is_parent(uid):
         await update.message.reply_text("<b>🏆 Parent Control Active</b>", parse_mode="HTML", reply_markup=parent_main_keyboard())
     elif is_son(uid):
-        await update.message.reply_text("<b>🚀 Welcome Champ!</b>", parse_mode="HTML", reply_markup=son_main_keyboard())
+        msg = "<b>🚀 Welcome Champ!</b>\n\n<i>Tip: You can now type '/tutor [question]' for homework help, or just chat with me to log your tasks!</i>"
+        await update.message.reply_text(msg, parse_mode="HTML", reply_markup=son_main_keyboard())
     else:
-        await update.message.reply_text(f"Your ID: <code>{uid}</code>\nSend this to Dad.", parse_mode="HTML")
+        await update.message.reply_text(f"Your ID: <code>{uid}</code>", parse_mode="HTML")
 
-# --- SON LOGIC: TASK SUBMISSIONS ---
-async def show_category_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
-    data = load_data()
-    done = [h["task_id"] for h in data["history"] if h["date"] == today_str() and h["status"] != "denied"]
-    tasks = [t for t in data["tasks"] if t.get("cat") == cat and t["id"] not in done]
-
-    if not tasks:
-        await update.message.reply_text("🎉 All missions complete for this category!")
+# --- AI TUTOR ---
+async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_son(update.effective_user.id): return
+    if not ai_model:
+        await update.message.reply_text("AI Tutor is currently offline. Dad needs to add the API Key!")
+        return
+    
+    question = " ".join(context.args)
+    if not question:
+        await update.message.reply_text("What do you need help with? Example: `/tutor What is photosynthesis?`", parse_mode="Markdown")
         return
 
-    buttons = []
-    for t in tasks:
-        try:
-            d_time = datetime.strptime(t.get("deadline", "23:59"), "%H:%M")
-            formatted_time = d_time.strftime("%I:%M %p")
-        except ValueError:
-            formatted_time = "11:59 PM"
-            
-        button_label = f"{t['name']} ⏰ Due: {formatted_time}"
-        buttons.append([InlineKeyboardButton(button_label, callback_data=f"confirm|{t['id']}")])
+    await update.message.reply_text("🧠 Thinking...")
+    prompt = f"You are a helpful, encouraging tutor for a student named Rajkumar. He asks: '{question}'. Guide him to the answer conceptually. Do NOT just give him the direct mathematical or factual answer. Make it engaging."
+    try:
+        response = await ai_model.generate_content_async(prompt)
+        await update.message.reply_text(f"👨‍🏫 <b>Tutor:</b>\n{response.text}", parse_mode="HTML")
+    except Exception as e:
+        logger.error(e)
+        await update.message.reply_text("Oops, my brain is taking a nap. Ask Mom or Dad for now!")
 
-    await update.message.reply_text(f"Select a {cat} mission:", reply_markup=InlineKeyboardMarkup(buttons))
+# --- SMART PROOF (VISION AI) ---
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_son(update.effective_user.id): return
+    if not ai_model:
+        await update.message.reply_text("Awesome picture! (AI is offline so I can't look at it closely yet).")
+        return
+
+    await update.message.reply_text("📸 Looking at your photo...")
+    
+    file = await update.message.photo[-1].get_file()
+    image_bytes = await file.download_as_bytearray()
+    
+    data = load_data()
+    task_names = [t["name"] for t in data["tasks"]]
+    
+    prompt = f"Look at this photo. Which of these tasks from this list does it most likely represent? {task_names}. Reply ONLY with the exact name of the task, or 'None' if it doesn't match any."
+    
+    try:
+        response = await ai_model.generate_content_async([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
+        guess = response.text.strip()
+        
+        matched_task = next((t for t in data["tasks"] if t["name"].lower() in guess.lower()), None)
+        
+        if matched_task:
+            kb = [[InlineKeyboardButton("✅ Yes, submit it!", callback_data=f"submit|{matched_task['id']}"), 
+                   InlineKeyboardButton("❌ No", callback_data="cancel_sub")]]
+            await update.message.reply_text(f"🤖 My AI eyes think this is proof for: <b>{matched_task['name']}</b>.\n\nIs that right?", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+        else:
+            await update.message.reply_text("I'm not sure which mission this is for! Try using the menu buttons instead.")
+    except Exception as e:
+        logger.error(e)
+        await update.message.reply_text("Hmm, my eyes are blurry right now. Use the buttons to submit!")
 
 # --- REDEEM COMMAND (SON) ---
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -154,7 +194,115 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                InlineKeyboardButton("❌ Deny & Refund", callback_data=f"p_rej|R|{reward['id']}|{today_str()}")]]
         await context.bot.send_message(pid, f"🎁 <b>Reward Request!</b>\nRajkumar wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-# --- CALLBACK ROUTER (HANDLES ALL BUTTON CLICKS) ---
+
+# --- MENU BUTTONS & NLP LOGGER ---
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    uid = update.effective_user.id
+    data = load_data()
+
+    menu_buttons = ["☀️ Morning Missions", "🌙 Evening & Study", "📊 My Points", "🎁 Rewards", "📜 History", "⚖️ Rules", "⚙️ Manage Tasks", "🎡 Manage Rewards", "📈 Weekly Progress", "💰 Edit Points", "🔄 Reset Today"]
+
+    if text in menu_buttons:
+        if text == "☀️ Morning Missions" and is_son(uid):
+            await show_category_tasks(update, context, "morning")
+        elif text == "🌙 Evening & Study" and is_son(uid):
+            await show_category_tasks(update, context, "evening")
+        elif text == "📊 My Points" and is_son(uid):
+            await update.message.reply_text(f"💰 Balance: <b>{data['points']} pts</b>", parse_mode="HTML")
+        elif text == "🎁 Rewards" and is_son(uid):
+            lines = [f"<b>🎁 Rewards (Balance: {data['points']} pts)</b>\n<i>Type /redeem [id] to claim!</i>\n"]
+            for r in data["rewards"]: lines.append(f"• <code>{r['id']}</code>: {r['name']} ({r['cost']} pts)")
+            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        elif text == "📜 History" and is_son(uid):
+            hist = data["history"][-10:]
+            msg = "<b>📜 Recent Activity:</b>\n" + "\n".join([f"• {h['task_name']} ({h['status']})" for h in hist])
+            await update.message.reply_text(msg if hist else "No history yet.", parse_mode="HTML")
+        elif text == "⚖️ Rules" and is_son(uid):
+            msg = (
+                "<b>⚠️ Mission Rules & Penalties</b>\n\n"
+                "• <b>On Time:</b> 100% Points ✅\n"
+                "• <b>Up to 30 mins late:</b> 50% Points ⚠️\n"
+                "• <b>More than 30 mins late:</b> 2 Points 🐢\n\n"
+                "<i>Keep an eye on the clock on your buttons, Champ!</i>"
+            )
+            await update.message.reply_text(msg, parse_mode="HTML")
+        elif text == "⚙️ Manage Tasks" and is_parent(uid): 
+            msg = "<b>⚙️ Task Management</b>\n<i>Adding an existing ID edits it.</i>\n\n• <b>Add/Edit:</b> `/addtask id|Name|Pts|HH:MM|cat`\n• <b>Delete:</b> `/deltask id`"
+            await update.message.reply_text(msg, parse_mode="HTML")
+        elif text == "🎡 Manage Rewards" and is_parent(uid):
+            msg = "<b>🎡 Reward Management</b>\n<i>Adding an existing ID edits it.</i>\n\n• <b>Add/Edit:</b> `/addreward id|Name|Cost`\n• <b>Delete:</b> `/delreward id`"
+            await update.message.reply_text(msg, parse_mode="HTML")
+        elif text == "📈 Weekly Progress" and is_parent(uid): 
+            goal = data.get("weekly_goal", 700)
+            pts = data.get("points", 0)
+            pending_t = len([h for h in data["history"] if h.get("status") == "pending"])
+            pending_r = len([r for r in data.get("redemptions", []) if r.get("status") == "pending"])
+            msg = (
+                f"<b>📊 Rajkumar's Progress</b>\n\n"
+                f"💰 Total Points: <b>{pts}</b>\n"
+                f"🎯 Weekly Goal: <b>{goal}</b>\n"
+                f"🚀 Remaining: <b>{max(0, goal - pts)} pts</b>\n\n"
+                f"⏳ Tasks Pending Approval: <b>{pending_t}</b>\n"
+                f"🎁 Rewards Pending Approval: <b>{pending_r}</b>\n\n"
+                f"<i>To change the weekly goal, type:</i>\n`/setgoal 800`"
+            )
+            await update.message.reply_text(msg, parse_mode="HTML")
+        elif text == "💰 Edit Points" and is_parent(uid):
+            msg = (
+                "<b>💰 Manual Point Adjustment</b>\n\n"
+                "To add or remove points instantly, type:\n"
+                "• Add 50 points: `/points +50`\n"
+                "• Remove 20 points: `/points -20`\n\n"
+                "<i>Rajkumar will be notified automatically!</i>"
+            )
+            await update.message.reply_text(msg, parse_mode="HTML")
+        elif text == "🔄 Reset Today" and is_parent(uid):
+            data["history"] = [h for h in data["history"] if h["date"] != today_str()]
+            save_data(data)
+            await update.message.reply_text("✅ Today's history has been wiped.")
+        return
+
+    # NLP LOGGER
+    if is_son(uid) and ai_model:
+        await update.message.reply_text("🤖 Translating your message...")
+        task_list = [{"id": t["id"], "name": t["name"]} for t in data["tasks"]]
+        prompt = f"Rajkumar just said: '{text}'. Based on this text, which task IDs did he complete? Available tasks: {task_list}. Reply ONLY with a comma-separated list of IDs (e.g., 'waking, teeth'). If none match, reply 'NONE'."
+        
+        try:
+            response = await ai_model.generate_content_async(prompt)
+            detected_ids = [i.strip().lower() for i in response.text.split(",") if i.strip()]
+            
+            matched = [t for t in data["tasks"] if t["id"].lower() in detected_ids]
+            if matched:
+                for t in matched:
+                    kb = [[InlineKeyboardButton("✅ Confirm", callback_data=f"submit|{t['id']}"), InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")]]
+                    await update.message.reply_text(f"Did you complete: <b>{t['name']}</b>?", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+            else:
+                await update.message.reply_text("I couldn't figure out which mission that was. Try using the menu buttons! 🎯")
+        except:
+            await update.message.reply_text("I didn't quite catch that. Try using the menu buttons! 🎯")
+
+# --- UI & CALLBACK LOGIC ---
+async def show_category_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
+    data = load_data()
+    done = [h["task_id"] for h in data["history"] if h["date"] == today_str() and h["status"] != "denied"]
+    tasks = [t for t in data["tasks"] if t.get("cat") == cat and t["id"] not in done]
+
+    if not tasks:
+        await update.message.reply_text("🎉 All missions complete for this category!")
+        return
+
+    buttons = []
+    for t in tasks:
+        try:
+            d_time = datetime.strptime(t.get("deadline", "23:59"), "%H:%M")
+            ft = d_time.strftime("%I:%M %p")
+        except ValueError: ft = "11:59 PM"
+        buttons.append([InlineKeyboardButton(f"{t['name']} ⏰ {ft}", callback_data=f"confirm|{t['id']}")])
+
+    await update.message.reply_text(f"Select a {cat} mission:", reply_markup=InlineKeyboardMarkup(buttons))
+
 async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -166,45 +314,30 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "confirm":
         t_id = parts[1]
         task = next((t for t in data["tasks"] if t["id"] == t_id), None)
-        if not task: return
-        kb = [[InlineKeyboardButton("✅ Yes, I'm Done!", callback_data=f"submit|{t_id}")],
-              [InlineKeyboardButton("❌ Oops, Go Back", callback_data="cancel_sub")]]
+        kb = [[InlineKeyboardButton("✅ Yes, I'm Done!", callback_data=f"submit|{t_id}")], [InlineKeyboardButton("❌ Oops, Go Back", callback_data="cancel_sub")]]
         await query.edit_message_text(f"Confirming: <b>{task['name']}</b>", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
     elif action == "submit":
         t_id = parts[1]
         task = next(t for t in data["tasks"] if t["id"] == t_id)
-        
         now = datetime.now()
         try:
             d_time = datetime.strptime(task.get("deadline", "23:59"), "%H:%M").time()
             deadline_dt = now.replace(hour=d_time.hour, minute=d_time.minute, second=0, microsecond=0)
-        except ValueError:
-            deadline_dt = now
+        except ValueError: deadline_dt = now
         
-        pts = task["points"]
-        status_txt = "On Time! ✅"
-        
+        pts, status_txt = task["points"], "On Time! ✅"
         if now > deadline_dt:
-            diff_mins = (now - deadline_dt).total_seconds() / 60
-            if diff_mins <= 30: 
-                pts = int(pts * 0.5)
-                status_txt = "Late (50%) ⚠️"
-            else: 
-                pts = 2
-                status_txt = "Very Late (2pts) 🐢"
+            if (now - deadline_dt).total_seconds() / 60 <= 30: pts, status_txt = int(pts * 0.5), "Late (50%) ⚠️"
+            else: pts, status_txt = 2, "Very Late (2pts) 🐢"
 
         data["history"].append({"date": today_str(), "task_id": t_id, "task_name": task["name"], "points": pts, "status": "pending"})
         save_data(data)
-        await query.edit_message_text(f"✅ Submitted: {task['name']} ({pts} expected pts)")
+        await query.edit_message_text(f"✅ Submitted: {task['name']} ({pts} pts)")
         
         for pid in PARENT_IDS:
-            kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"p_app|T|{t_id}|{today_str()}"),
-                   InlineKeyboardButton("❌ Deny", callback_data=f"p_rej|T|{t_id}|{today_str()}")]]
+            kb = [[InlineKeyboardButton("✅ Approve", callback_data=f"p_app|T|{t_id}|{today_str()}"), InlineKeyboardButton("❌ Deny", callback_data=f"p_rej|T|{t_id}|{today_str()}")]]
             await context.bot.send_message(pid, f"🔔 <b>New Task</b>\n{task['name']}\nStatus: {status_txt}\nPoints: {pts}", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-
-    elif action == "cancel_sub":
-        await query.edit_message_text("Action cancelled. Use the menu below.")
 
     elif action.startswith("p_") and is_parent(uid):
         act, itype, iid, idate = parts[0], parts[1], parts[2], parts[3]
@@ -217,7 +350,16 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         h["status"] = "approved"
                         data["points"] += h["points"]
                         await query.edit_message_text(f"✅ Approved by {parent_name}")
-                        await context.bot.send_message(SON_CHAT_ID, f"🌟 <b>{h['task_name']}</b> approved! +{h['points']} pts!", parse_mode="HTML")
+                        
+                        if ai_model:
+                            try:
+                                prompt = f"Write a fast, 1-sentence fun congratulatory message for a kid named Rajkumar for completing his task: '{h['task_name']}'. Include an emoji."
+                                ai_response = await ai_model.generate_content_async(prompt)
+                                custom_msg = ai_response.text.strip()
+                            except: custom_msg = "Great job!"
+                        else: custom_msg = "Great job!"
+
+                        await context.bot.send_message(SON_CHAT_ID, f"🌟 <b>{h['task_name']}</b> approved! +{h['points']} pts!\n\n🤖 <i>{custom_msg}</i>", parse_mode="HTML")
                     else:
                         h["status"] = "denied"
                         await query.edit_message_text(f"❌ Denied by {parent_name}")
@@ -237,74 +379,6 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await context.bot.send_message(SON_CHAT_ID, f"❌ Reward denied: <b>{r['reward_name']}</b>. Points refunded.", parse_mode="HTML")
                     break
         save_data(data)
-
-# --- MAIN MENU TEXT ROUTER ---
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    uid = update.effective_user.id
-    data = load_data()
-
-    if is_son(uid):
-        if text == "☀️ Morning Missions": await show_category_tasks(update, context, "morning")
-        elif text == "🌙 Evening & Study": await show_category_tasks(update, context, "evening")
-        elif text == "📊 My Points": await update.message.reply_text(f"💰 Balance: <b>{data['points']} pts</b>", parse_mode="HTML")
-        elif text == "🎁 Rewards":
-            lines = [f"<b>🎁 Rewards (Balance: {data['points']} pts)</b>\n<i>Type /redeem [id] to claim!</i>\n"]
-            for r in data["rewards"]: lines.append(f"• <code>{r['id']}</code>: {r['name']} ({r['cost']} pts)")
-            await update.message.reply_text("\n".join(lines), parse_mode="HTML")
-        elif text == "📜 History":
-            hist = data["history"][-10:]
-            msg = "<b>📜 Recent Activity:</b>\n" + "\n".join([f"• {h['task_name']} ({h['status']})" for h in hist])
-            await update.message.reply_text(msg if hist else "No history yet.", parse_mode="HTML")
-        elif text == "⚖️ Rules":
-            msg = (
-                "<b>⚠️ Mission Rules & Penalties</b>\n\n"
-                "• <b>On Time:</b> 100% Points ✅\n"
-                "• <b>Up to 30 mins late:</b> 50% Points ⚠️\n"
-                "• <b>More than 30 mins late:</b> 2 Points 🐢\n\n"
-                "<i>Keep an eye on the clock on your buttons, Champ!</i>"
-            )
-            await update.message.reply_text(msg, parse_mode="HTML")
-
-    elif is_parent(uid):
-        if text == "⚙️ Manage Tasks": 
-            msg = "<b>⚙️ Task Management</b>\n<i>Adding an existing ID edits it.</i>\n\n• <b>Add/Edit:</b> `/addtask id|Name|Pts|HH:MM|cat`\n• <b>Delete:</b> `/deltask id`"
-            await update.message.reply_text(msg, parse_mode="HTML")
-            
-        elif text == "🎡 Manage Rewards":
-            msg = "<b>🎡 Reward Management</b>\n<i>Adding an existing ID edits it.</i>\n\n• <b>Add/Edit:</b> `/addreward id|Name|Cost`\n• <b>Delete:</b> `/delreward id`"
-            await update.message.reply_text(msg, parse_mode="HTML")
-            
-        elif text == "📈 Weekly Progress": 
-            goal = data.get("weekly_goal", 700)
-            pts = data.get("points", 0)
-            pending_t = len([h for h in data["history"] if h.get("status") == "pending"])
-            pending_r = len([r for r in data.get("redemptions", []) if r.get("status") == "pending"])
-            msg = (
-                f"<b>📊 Rajkumar's Progress</b>\n\n"
-                f"💰 Total Points: <b>{pts}</b>\n"
-                f"🎯 Weekly Goal: <b>{goal}</b>\n"
-                f"🚀 Remaining: <b>{max(0, goal - pts)} pts</b>\n\n"
-                f"⏳ Tasks Pending Approval: <b>{pending_t}</b>\n"
-                f"🎁 Rewards Pending Approval: <b>{pending_r}</b>\n\n"
-                f"<i>To change the weekly goal, type:</i>\n`/setgoal 800`"
-            )
-            await update.message.reply_text(msg, parse_mode="HTML")
-            
-        elif text == "💰 Edit Points":
-            msg = (
-                "<b>💰 Manual Point Adjustment</b>\n\n"
-                "To add or remove points instantly, type:\n"
-                "• Add 50 points: `/points +50`\n"
-                "• Remove 20 points: `/points -20`\n\n"
-                "<i>Rajkumar will be notified automatically!</i>"
-            )
-            await update.message.reply_text(msg, parse_mode="HTML")
-            
-        elif text == "🔄 Reset Today":
-            data["history"] = [h for h in data["history"] if h["date"] != today_str()]
-            save_data(data)
-            await update.message.reply_text("✅ Today's history has been wiped.")
 
 # --- ADMIN CRUD COMMANDS ---
 async def edit_points_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,6 +460,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("tutor", ai_tutor_cmd))
     app.add_handler(CommandHandler("redeem", redeem_command))
     app.add_handler(CommandHandler("setgoal", set_goal_cmd))
     app.add_handler(CommandHandler("points", edit_points_cmd))
@@ -395,6 +470,7 @@ def main():
     app.add_handler(CommandHandler("delreward", del_reward_cmd))
     
     app.add_handler(CallbackQueryHandler(handle_callbacks))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
     # 02:00 UTC = 06:00 AM Seychelles Time
