@@ -26,7 +26,7 @@ except ImportError:
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION (RAILWAY ENV VARIABLES) ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 SON_CHAT_ID = int(os.environ.get("SON_CHAT_ID", "0"))
 PARENT_IDS_RAW = os.environ.get("PARENT_IDS", "0")
@@ -109,7 +109,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"Your ID: <code>{uid}</code>", parse_mode="HTML")
 
-# --- AI TUTOR ---
+# --- AI TUTOR (PATCHED FOR PLAIN TEXT) ---
 async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_son(update.effective_user.id): return
     if not ai_model:
@@ -122,12 +122,12 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text("🧠 Thinking...")
-    prompt = f"You are a helpful, encouraging tutor for a student named Rajkumar. He asks: '{question}'. Guide him to the answer conceptually. Do NOT just give him the direct mathematical or factual answer. Make it engaging."
+    prompt = f"You are a helpful, encouraging tutor for a student named Rajkumar. He asks: '{question}'. Guide him to the answer conceptually. Do NOT just give him the direct mathematical or factual answer. Keep it engaging. Do NOT use any Markdown formatting, bolding, italics, or special symbols. Use plain text only."
     try:
         response = await ai_model.generate_content_async(prompt)
-        await update.message.reply_text(f"👨‍🏫 <b>Tutor:</b>\n{response.text}", parse_mode="HTML")
+        await update.message.reply_text(f"👨‍🏫 Tutor:\n\n{response.text.strip()}")
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Tutor Error: {e}")
         await update.message.reply_text("Oops, my brain is taking a nap. Ask Mom or Dad for now!")
 
 # --- SMART PROOF (VISION AI) ---
@@ -194,8 +194,7 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                InlineKeyboardButton("❌ Deny & Refund", callback_data=f"p_rej|R|{reward['id']}|{today_str()}")]]
         await context.bot.send_message(pid, f"🎁 <b>Reward Request!</b>\nRajkumar wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-
-# --- MENU BUTTONS & NLP LOGGER ---
+# --- MENU BUTTONS & NLP LOGGER (PATCHED FOR SCRUBBING) ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id
@@ -267,11 +266,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_son(uid) and ai_model:
         await update.message.reply_text("🤖 Translating your message...")
         task_list = [{"id": t["id"], "name": t["name"]} for t in data["tasks"]]
-        prompt = f"Rajkumar just said: '{text}'. Based on this text, which task IDs did he complete? Available tasks: {task_list}. Reply ONLY with a comma-separated list of IDs (e.g., 'waking, teeth'). If none match, reply 'NONE'."
+        prompt = f"Rajkumar just said: '{text}'. Based on this text, which task IDs did he complete? Available tasks: {task_list}. Reply ONLY with a comma-separated list of IDs (e.g., waking, teeth). Do NOT use quotes or extra words. If none match, reply NONE."
         
         try:
             response = await ai_model.generate_content_async(prompt)
-            detected_ids = [i.strip().lower() for i in response.text.split(",") if i.strip()]
+            clean_text = response.text.replace("'", "").replace('"', '').replace('`', '').replace('\n', '').strip()
+            detected_ids = [i.strip().lower() for i in clean_text.split(",") if i.strip() and i.strip().lower() != "none"]
             
             matched = [t for t in data["tasks"] if t["id"].lower() in detected_ids]
             if matched:
@@ -279,9 +279,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     kb = [[InlineKeyboardButton("✅ Confirm", callback_data=f"submit|{t['id']}"), InlineKeyboardButton("❌ Cancel", callback_data="cancel_sub")]]
                     await update.message.reply_text(f"Did you complete: <b>{t['name']}</b>?", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
             else:
-                await update.message.reply_text("I couldn't figure out which mission that was. Try using the menu buttons! 🎯")
-        except:
-            await update.message.reply_text("I didn't quite catch that. Try using the menu buttons! 🎯")
+                await update.message.reply_text(f"I thought you meant '{clean_text}', but I couldn't match it to a mission. Try using the menu buttons! 🎯")
+        except Exception as e:
+            logger.error(f"AI Logger Error: {e}")
+            await update.message.reply_text("My AI brain hit a small snag! Use the menu buttons for now. 🎯")
 
 # --- UI & CALLBACK LOGIC ---
 async def show_category_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
@@ -473,9 +474,9 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # 02:00 UTC = 06:00 AM Seychelles Time
+    # Reminders: 02:00 UTC = 06:00 AM Seychelles Time
     app.job_queue.run_daily(morning_reminder, time=time(2, 0))
-    # 13:00 UTC = 05:00 PM Seychelles Time
+    # Reminders: 13:00 UTC = 05:00 PM Seychelles Time
     app.job_queue.run_daily(evening_reminder, time=time(13, 0))
     
     app.run_polling()
