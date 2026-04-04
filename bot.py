@@ -11,18 +11,34 @@ from telegram.ext import (
     CallbackQueryHandler, ContextTypes, filters
 )
 
-# --- AI SETUP ---
+# --- AI SETUP (Groq - Free, no credit card required) ---
 try:
-    import google.generativeai as genai
-    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-    if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        # gemini-1.5-flash has a free tier (1500 req/day, 15 req/min)
-        ai_model = genai.GenerativeModel('gemini-1.5-flash')
+    from groq import Groq as GroqClient
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+    if GROQ_API_KEY:
+        groq_client = GroqClient(api_key=GROQ_API_KEY)
+        GROQ_MODEL = "llama-3.3-70b-versatile"  # Free tier, ~500k tokens/day
+        ai_model = True  # Flag: AI is available
     else:
+        groq_client = None
         ai_model = None
 except ImportError:
+    groq_client = None
     ai_model = None
+
+async def groq_generate(prompt: str) -> str:
+    """Call Groq API asynchronously."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    def _call():
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500,
+            temperature=0.7,
+        )
+        return response.choices[0].message.content.strip()
+    return await loop.run_in_executor(None, _call)
 
 # --- LOGGING ---
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
@@ -83,7 +99,7 @@ CONGRATS_MSGS = [
 
 def is_quota_error(e):
     msg = str(e).lower()
-    return "429" in str(e) or "quota" in msg or "rate" in msg or "billing" in msg
+    return "429" in str(e) or "quota" in msg or "rate" in msg or "quota" in msg
 
 async def notify_parents_quota(context):
     for pid in PARENT_IDS:
@@ -91,8 +107,7 @@ async def notify_parents_quota(context):
             await context.bot.send_message(
                 pid,
                 "⚠️ <b>Bot Alert: AI Quota Exceeded</b>\n\n"
-                "The Gemini free tier limit has been reached. AI features (tutor, smart logging) are temporarily offline.\n\n"
-                "To fix: enable billing at https://console.cloud.google.com/billing\n"
+                "The Groq free tier rate limit was briefly exceeded. This auto-resets — no action needed.\n\n"
                 "Menu buttons still work normally! ✅",
                 parse_mode="HTML"
             )
@@ -153,8 +168,8 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🧠 Thinking...")
     prompt = f"You are a helpful, encouraging tutor for a student named Rajkumar. He asks: '{question}'. Guide him to the answer conceptually. Do NOT just give him the direct mathematical or factual answer. Keep it engaging. Do NOT use any Markdown formatting, bolding, italics, or special symbols. Use plain text only."
     try:
-        response = await ai_model.generate_content_async(prompt)
-        await update.message.reply_text(f"👨‍🏫 Tutor:\n\n{response.text.strip()}")
+        response = await groq_generate(prompt)
+        await update.message.reply_text(f"👨‍🏫 Tutor:\n\n{response}")
     except Exception as e:
         logger.error(f"Tutor Error: {e}")
         if is_quota_error(e):
@@ -169,39 +184,31 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- SMART PROOF (VISION AI) ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_son(update.effective_user.id): return
-    if not ai_model:
-        await update.message.reply_text("Awesome picture! (AI is offline so I can't look at it closely yet).")
-        return
-
-    await update.message.reply_text("📸 Looking at your photo...")
-    
-    file = await update.message.photo[-1].get_file()
-    image_bytes = await file.download_as_bytearray()
-    
+    # Groq is text-only — ask which mission the photo is for using buttons
+    await update.message.reply_text(
+        "📸 Great proof photo! Which mission did you just complete? Pick it below 👇"
+    )
+    # Determine time of day and show appropriate category
+    hour = datetime.now().hour
+    cat = "morning" if hour < 13 else "evening"
     data = load_data()
-    task_names = [t["name"] for t in data["tasks"]]
-    
-    prompt = f"Look at this photo. Which of these tasks from this list does it most likely represent? {task_names}. Reply ONLY with the exact name of the task, or 'None' if it doesn't match any."
-    
-    try:
-        response = await ai_model.generate_content_async([prompt, {"mime_type": "image/jpeg", "data": image_bytes}])
-        guess = response.text.strip()
-        
-        matched_task = next((t for t in data["tasks"] if t["name"].lower() in guess.lower()), None)
-        
-        if matched_task:
-            kb = [[InlineKeyboardButton("✅ Yes, submit it!", callback_data=f"submit|{matched_task['id']}"), 
-                   InlineKeyboardButton("❌ No", callback_data="cancel_sub")]]
-            await update.message.reply_text(f"🤖 My AI eyes think this is proof for: <b>{matched_task['name']}</b>.\n\nIs that right?", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
-        else:
-            await update.message.reply_text("I'm not sure which mission this is for! Try using the menu buttons instead.")
-    except Exception as e:
-        logger.error(e)
-        if is_quota_error(e):
-            await update.message.reply_text("📸 Got your photo! My AI eyes are resting — use the menu buttons to log your mission. 😊")
-            await notify_parents_quota(context)
-        else:
-            await update.message.reply_text("Hmm, my eyes are blurry right now. Use the buttons to submit!")
+    done = [h["task_id"] for h in data["history"] if h["date"] == today_str() and h["status"] != "denied"]
+    tasks = [t for t in data["tasks"] if t.get("cat") == cat and t["id"] not in done]
+    if not tasks:
+        # Try the other category
+        other_cat = "evening" if cat == "morning" else "morning"
+        tasks = [t for t in data["tasks"] if t.get("cat") == other_cat and t["id"] not in done]
+    if not tasks:
+        await update.message.reply_text("🎉 All missions are already completed today!")
+        return
+    buttons = []
+    for t in tasks:
+        try:
+            ft = datetime.strptime(t.get("deadline", "23:59"), "%H:%M").strftime("%I:%M %p")
+        except ValueError:
+            ft = "11:59 PM"
+        buttons.append([InlineKeyboardButton(f"{t['name']} ⏰ {ft}", callback_data=f"confirm|{t['id']}")])
+    await update.message.reply_text("Select your mission:", reply_markup=InlineKeyboardMarkup(buttons))
 
 # --- REDEEM COMMAND (SON) ---
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -309,8 +316,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = f"Rajkumar just said: '{text}'. Based on this text, which task IDs did he complete? Available tasks: {task_list}. Reply ONLY with a comma-separated list of IDs (e.g., waking, teeth). Do NOT use quotes or extra words. If none match, reply NONE."
         
         try:
-            response = await ai_model.generate_content_async(prompt)
-            clean_text = response.text.replace("'", "").replace('"', '').replace('`', '').replace('*', '').replace('\n', '').strip()
+            response = await groq_generate(prompt)
+            clean_text = response.replace("'", "").replace('"', '').replace('`', '').replace('*', '').replace('\n', '').strip()
             detected_ids = [i.strip().lower() for i in clean_text.split(",") if i.strip() and i.strip().lower() != "none"]
             
             matched = [t for t in data["tasks"] if t["id"].lower() in detected_ids]
@@ -402,8 +409,7 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if ai_model:
                             try:
                                 prompt = f"Write a fast, 1-sentence fun congratulatory message for a kid named Rajkumar for completing his task: '{h['task_name']}'. Include an emoji."
-                                ai_response = await ai_model.generate_content_async(prompt)
-                                custom_msg = ai_response.text.strip()
+                                custom_msg = await groq_generate(prompt)
                             except: custom_msg = random.choice(CONGRATS_MSGS)
                         else: custom_msg = random.choice(CONGRATS_MSGS)
 
