@@ -1,6 +1,7 @@
 import json
 import os
 import logging
+import random
 from datetime import datetime, time
 from pathlib import Path
 
@@ -16,8 +17,8 @@ try:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-        # FIXED: gemini-2.0-flash is the correct current model name
-        ai_model = genai.GenerativeModel('gemini-2.0-flash')
+        # gemini-1.5-flash has a free tier (1500 req/day, 15 req/min)
+        ai_model = genai.GenerativeModel('gemini-1.5-flash')
     else:
         ai_model = None
 except ImportError:
@@ -69,6 +70,33 @@ DEFAULT_REWARDS = [
     {"id": "cash10",   "name": "💵 10 SCR cash",                "cost": 350},
     {"id": "gameday",  "name": "🎮 Full game day (weekend)",    "cost": 1800},
 ]
+
+CONGRATS_MSGS = [
+    "Amazing work! Keep crushing it! 🔥",
+    "You're on fire today, Champ! 🌟",
+    "That's how champions do it! 💪",
+    "Superstar move right there! ⭐",
+    "Nailed it! Keep going! 🏆",
+    "Brilliant effort, Rajkumar! 🎯",
+    "One step closer to your reward! 🎁",
+]
+
+def is_quota_error(e):
+    msg = str(e).lower()
+    return "429" in str(e) or "quota" in msg or "rate" in msg or "billing" in msg
+
+async def notify_parents_quota(context):
+    for pid in PARENT_IDS:
+        try:
+            await context.bot.send_message(
+                pid,
+                "⚠️ <b>Bot Alert: AI Quota Exceeded</b>\n\n"
+                "The Gemini free tier limit has been reached. AI features (tutor, smart logging) are temporarily offline.\n\n"
+                "To fix: enable billing at https://console.cloud.google.com/billing\n"
+                "Menu buttons still work normally! ✅",
+                parse_mode="HTML"
+            )
+        except Exception: pass
 
 def load_data():
     if DATA_FILE.exists():
@@ -129,7 +157,14 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👨‍🏫 Tutor:\n\n{response.text.strip()}")
     except Exception as e:
         logger.error(f"Tutor Error: {e}")
-        await update.message.reply_text(f"Oops, my brain is taking a nap. Ask Mom or Dad for now!\n\n<i>(System Error: {str(e)})</i>", parse_mode="HTML")
+        if is_quota_error(e):
+            await update.message.reply_text(
+                "🤖 My brain needs a little rest — I've answered too many questions today!\n"
+                "Try again later, or ask Mom or Dad directly. 😊"
+            )
+            await notify_parents_quota(context)
+        else:
+            await update.message.reply_text("Oops, something went wrong! Ask Mom or Dad for help. 😊")
 
 # --- SMART PROOF (VISION AI) ---
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -162,7 +197,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("I'm not sure which mission this is for! Try using the menu buttons instead.")
     except Exception as e:
         logger.error(e)
-        await update.message.reply_text("Hmm, my eyes are blurry right now. Use the buttons to submit!")
+        if is_quota_error(e):
+            await update.message.reply_text("📸 Got your photo! My AI eyes are resting — use the menu buttons to log your mission. 😊")
+            await notify_parents_quota(context)
+        else:
+            await update.message.reply_text("Hmm, my eyes are blurry right now. Use the buttons to submit!")
 
 # --- REDEEM COMMAND (SON) ---
 async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -283,7 +322,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"I thought you meant '{clean_text}', but I couldn't match it to a mission. Try using the menu buttons! 🎯")
         except Exception as e:
             logger.error(f"AI Logger Error: {e}")
-            await update.message.reply_text(f"🤖 <b>Oops! An error occurred:</b>\n\n<code>{str(e)}</code>\n\nShow this to Dad so he can fix it!", parse_mode="HTML")
+            if is_quota_error(e):
+                await update.message.reply_text(
+                    "🤖 My brain is full for today! Use the menu buttons instead:\n\n"
+                    "☀️ Morning Missions  |  🌙 Evening & Study"
+                )
+                await notify_parents_quota(context)
+            else:
+                await update.message.reply_text("I couldn't understand that. Try the menu buttons! 🎯")
 
 # --- UI & CALLBACK LOGIC ---
 async def show_category_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
@@ -358,8 +404,8 @@ async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 prompt = f"Write a fast, 1-sentence fun congratulatory message for a kid named Rajkumar for completing his task: '{h['task_name']}'. Include an emoji."
                                 ai_response = await ai_model.generate_content_async(prompt)
                                 custom_msg = ai_response.text.strip()
-                            except: custom_msg = "Great job!"
-                        else: custom_msg = "Great job!"
+                            except: custom_msg = random.choice(CONGRATS_MSGS)
+                        else: custom_msg = random.choice(CONGRATS_MSGS)
 
                         await context.bot.send_message(SON_CHAT_ID, f"🌟 <b>{h['task_name']}</b> approved! +{h['points']} pts!\n\n🤖 <i>{custom_msg}</i>", parse_mode="HTML")
                     else:
