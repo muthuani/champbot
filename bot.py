@@ -118,7 +118,7 @@ async def ai_tutor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     question = " ".join(context.args)
     if not question:
-        await update.message.reply_text("What do you need help with? Example: `/tutor What is photosynthesis?`", parse_mode="Markdown")
+        await update.message.reply_text("What do you need help with? Example: `/tutor What is photosynthesis?`")
         return
 
     await update.message.reply_text("🧠 Thinking...")
@@ -194,7 +194,7 @@ async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                InlineKeyboardButton("❌ Deny & Refund", callback_data=f"p_rej|R|{reward['id']}|{today_str()}")]]
         await context.bot.send_message(pid, f"🎁 <b>Reward Request!</b>\nRajkumar wants: {reward['name']}\nCost: {reward['cost']} pts", parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
 
-# --- MENU BUTTONS & NLP LOGGER (PATCHED FOR SCRUBBING) ---
+# --- MENU BUTTONS & NLP LOGGER (PATCHED) ---
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     uid = update.effective_user.id
@@ -270,7 +270,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             response = await ai_model.generate_content_async(prompt)
-            clean_text = response.text.replace("'", "").replace('"', '').replace('`', '').replace('\n', '').strip()
+            # Scrubber fully active to prevent formatting errors
+            clean_text = response.text.replace("'", "").replace('"', '').replace('`', '').replace('*', '').replace('\n', '').strip()
             detected_ids = [i.strip().lower() for i in clean_text.split(",") if i.strip() and i.strip().lower() != "none"]
             
             matched = [t for t in data["tasks"] if t["id"].lower() in detected_ids]
@@ -282,7 +283,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(f"I thought you meant '{clean_text}', but I couldn't match it to a mission. Try using the menu buttons! 🎯")
         except Exception as e:
             logger.error(f"AI Logger Error: {e}")
-            await update.message.reply_text("My AI brain hit a small snag! Use the menu buttons for now. 🎯")
+            await update.message.reply_text(f"🤖 <b>Oops! An error occurred:</b>\n\n<code>{str(e)}</code>\n\nShow this to Dad so he can fix it!", parse_mode="HTML")
 
 # --- UI & CALLBACK LOGIC ---
 async def show_category_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE, cat):
